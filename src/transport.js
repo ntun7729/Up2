@@ -98,8 +98,12 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
       return;
     } catch (err) {
       lastError = err;
-      if (target.kind === "relay" && cfg.proxyCooldown > 0) unavailableUntil.set(target.id, Date.now() + cfg.proxyCooldown);
-      log(cfg, "tcp_fail", { ...target, latencyMs: Date.now() - started, message: message(err) });
+      const msg = message(err);
+      if (cfg.proxyCooldown > 0 && shouldCooldown(target, msg)) {
+        unavailableUntil.set(target.id, Date.now() + cfg.proxyCooldown);
+        log(cfg, "tcp_cooldown", { ...target, cooldownMs: cfg.proxyCooldown, reason: target.kind === "direct" ? "direct-restricted" : "relay-failed" });
+      }
+      log(cfg, "tcp_fail", { ...target, latencyMs: Date.now() - started, message: msg });
       try { remote.socket?.close(); } catch {}
       remote.socket = null;
     }
@@ -108,7 +112,7 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
 }
 
 function routeCandidates(host, port, cfg) {
-  const direct = [{ kind: "direct", host, port, id: `d:${host}:${port}` }];
+  const direct = { kind: "direct", host, port, id: `d:${host}:${port}` };
   const relays = cfg.proxies.map((value) => {
     const target = hostPort(value, port);
     return { kind: "relay", host: target.host, port: target.port, id: `r:${target.host}:${target.port}` };
@@ -116,10 +120,17 @@ function routeCandidates(host, port, cfg) {
 
   const usableRelays = relays.filter((target) => !isUnavailable(target.id));
   const availableRelays = usableRelays.length ? usableRelays : relays;
+  const directList = isUnavailable(direct.id) && availableRelays.length ? [] : [direct];
 
   if (cfg.policy === "proxy-only") return availableRelays;
-  if (cfg.policy === "proxy-first") return [...availableRelays, ...direct];
-  return [...direct, ...availableRelays];
+  if (cfg.policy === "proxy-first") return [...availableRelays, ...directList];
+  return [...directList, ...availableRelays];
+}
+
+function shouldCooldown(target, msg) {
+  if (target.kind === "relay") return true;
+  const lower = String(msg || "").toLowerCase();
+  return lower.includes("consider using fetch") || lower.includes("cannot connect to the specified address");
 }
 
 function isUnavailable(id) {
