@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test": "node --check src/worker.js"
+    "dev": "wrangler dev src/main.js",
+    "deploy": "wrangler deploy src/main.js",
+    "test": "node --check src/main.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
