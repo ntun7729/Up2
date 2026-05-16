@@ -7,6 +7,7 @@ enabled = true
 
 [vars]
 PROXY_POLICY = "direct-first"
+PROXY_FAIL_COOLDOWN_MS = "120000"
 DOH_STRATEGY = "race"
 DNS_CACHE_TTL_SECONDS = "60"
 DNS_TCP_FALLBACK = "true"
