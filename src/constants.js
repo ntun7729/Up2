@@ -1,4 +1,4 @@
-export const VERSION = "up2-vless-worker-2026-05-16";
+export const VERSION = "up2-vless-worker-adaptive-ip-2026-05-16";
 
 export const CF_IPS = [
   "104.16.0.0",
