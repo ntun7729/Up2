@@ -2,6 +2,7 @@ import { connect } from "cloudflare:sockets";
 import { WS_OPEN } from "./constants.js";
 import { dnsUdpWriter } from "./dns.js";
 import { resolveHostIps } from "./resolve.js";
+import { connectViaSocks5 } from "./socks5.js";
 import { parseVless } from "./vless.js";
 import { closeWs, concat, hostPort, log, message, timeout } from "./utils.js";
 
@@ -84,15 +85,20 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
   for (const target of await routeCandidates(host, port, cfg)) {
     const started = Date.now();
     try {
-      log(cfg, "tcp_try", target);
-      const socket = connect({ hostname: target.host, port: target.port });
-      if (socket.opened) await timeout(socket.opened, cfg.connectTimeout, "TCP connect timeout");
-      remote.socket = socket;
-      log(cfg, "tcp_connected", { ...target, latencyMs: Date.now() - started });
+      log(cfg, "tcp_try", publicTarget(target));
+      let socket;
+      if (target.kind === "socks5") {
+        socket = await connectViaSocks5(cfg.socks5, host, port, firstPayload, cfg);
+      } else {
+        socket = connect({ hostname: target.host, port: target.port });
+        if (socket.opened) await timeout(socket.opened, cfg.connectTimeout, "TCP connect timeout");
+        const writer = socket.writable.getWriter();
+        if (firstPayload?.byteLength) await writer.write(firstPayload);
+        writer.releaseLock();
+      }
 
-      const writer = socket.writable.getWriter();
-      if (firstPayload?.byteLength) await writer.write(firstPayload);
-      writer.releaseLock();
+      remote.socket = socket;
+      log(cfg, "tcp_connected", { ...publicTarget(target), latencyMs: Date.now() - started });
 
       socket.closed.catch(() => {}).finally(() => closeWs(webSocket));
       pipeBack(socket, webSocket, replyHeader, cfg);
@@ -102,9 +108,9 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
       const msg = message(err);
       if (cfg.proxyCooldown > 0 && shouldCooldown(target, msg)) {
         unavailableUntil.set(target.id, Date.now() + cfg.proxyCooldown);
-        log(cfg, "tcp_cooldown", { ...target, cooldownMs: cfg.proxyCooldown, reason: target.kind === "direct" ? "direct-restricted" : "relay-failed" });
+        log(cfg, "tcp_cooldown", { ...publicTarget(target), cooldownMs: cfg.proxyCooldown, reason: cooldownReason(target) });
       }
-      log(cfg, "tcp_fail", { ...target, latencyMs: Date.now() - started, message: msg });
+      log(cfg, "tcp_fail", { ...publicTarget(target), latencyMs: Date.now() - started, message: msg });
       try { remote.socket?.close(); } catch {}
       remote.socket = null;
     }
@@ -118,19 +124,23 @@ async function routeCandidates(host, port, cfg) {
     const target = hostPort(value, port);
     return { kind: "relay", host: target.host, port: target.port, id: `r:${target.host}:${target.port}` };
   }).filter((target) => target.host);
+  const socks = cfg.socks5 ? [{ kind: "socks5", host: cfg.socks5.host, port: cfg.socks5.port, id: `s:${cfg.socks5.host}:${cfg.socks5.port}` }] : [];
 
   const usableRelays = relays.filter((target) => !isUnavailable(target.id));
   const availableRelays = usableRelays.length ? usableRelays : relays;
-  const directList = isUnavailable(direct.id) && availableRelays.length ? [] : [direct];
-  const ipDirectList = await ipCandidates(host, port, cfg, availableRelays.length > 0);
+  const usableSocks = socks.filter((target) => !isUnavailable(target.id));
+  const availableSocks = usableSocks.length ? usableSocks : socks;
+  const fallbackCount = availableSocks.length + availableRelays.length;
+  const directList = isUnavailable(direct.id) && fallbackCount ? [] : [direct];
+  const ipDirectList = await ipCandidates(host, port, cfg, fallbackCount > 0);
 
-  if (cfg.policy === "proxy-only") return availableRelays;
-  if (cfg.policy === "proxy-first") return [...availableRelays, ...directList, ...ipDirectList];
-  return [...directList, ...ipDirectList, ...availableRelays];
+  if (cfg.policy === "proxy-only") return [...availableSocks, ...availableRelays];
+  if (cfg.policy === "proxy-first") return [...availableSocks, ...availableRelays, ...directList, ...ipDirectList];
+  return [...directList, ...ipDirectList, ...availableSocks, ...availableRelays];
 }
 
-async function ipCandidates(host, port, cfg, hasRelay) {
-  if (!hasRelay) return [];
+async function ipCandidates(host, port, cfg, hasFallback) {
+  if (!hasFallback) return [];
   if (!isUnavailable(`d:${host}:${port}`)) return [];
   const ips = await resolveHostIps(host, cfg);
   const out = [];
@@ -143,9 +153,19 @@ async function ipCandidates(host, port, cfg, hasRelay) {
 }
 
 function shouldCooldown(target, msg) {
-  if (target.kind === "relay") return true;
+  if (target.kind === "relay" || target.kind === "socks5") return true;
   const lower = String(msg || "").toLowerCase();
   return lower.includes("consider using fetch") || lower.includes("cannot connect to the specified address");
+}
+
+function cooldownReason(target) {
+  if (target.kind === "direct" || target.kind === "direct-ip") return "direct-restricted";
+  return `${target.kind}-failed`;
+}
+
+function publicTarget(target) {
+  if (target.kind !== "socks5") return target;
+  return { kind: target.kind, host: target.host, port: target.port, id: target.id };
 }
 
 function isUnavailable(id) {
