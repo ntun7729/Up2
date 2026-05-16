@@ -1,5 +1,6 @@
 import { DEFAULT_DNS_TCP, DEFAULT_DOH } from "./constants.js";
 import { bool, clamp, csv, dohStrategyNorm, first, int, policyNorm, uuidNorm, val } from "./utils.js";
+import { parseSocks5 } from "./socks5.js";
 
 export function loadConfig(env = {}, url, request) {
   const uuid = uuidNorm(first(env.UUID, env.uuid, env.USER_ID, env.userID));
@@ -13,15 +14,25 @@ export function loadConfig(env = {}, url, request) {
     env.proxyip,
   ), []);
 
+  const socks5 = parseSocks5(first(
+    val(url, "socks5"),
+    val(url, "socks"),
+    env.SOCKS5,
+    env.SOCKS5_PROXY,
+    env.SOCKS_PROXY,
+    env.socks5,
+  ));
+
   let policy = policyNorm(
     first(val(url, "proxyPolicy"), val(url, "proxy_policy"), val(url, "policy"), env.PROXY_POLICY),
-    proxies.length ? "proxy-first" : "direct-first",
+    proxies.length || socks5 ? "direct-first" : "direct-first",
   );
   if (bool(first(env.DISABLE_DIRECT, env.disableDirect), false)) policy = "proxy-only";
 
   return {
     uuid,
     proxies,
+    socks5,
     policy,
     proxyCooldown: clamp(int(first(env.PROXY_FAIL_COOLDOWN_MS, env.proxyFailCooldownMs), 120000), 0, 900000),
     connectTimeout: clamp(int(first(val(url, "timeout"), val(url, "connectTimeout"), env.CONNECT_TIMEOUT_MS), 6000), 1000, 30000),
