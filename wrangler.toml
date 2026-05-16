@@ -1,17 +1,11 @@
 name = "up2-vless-worker"
-main = "src/worker.js"
+main = "src/main.js"
 compatibility_date = "2026-05-16"
-
-# Required before deployment:
-# wrangler secret put UUID
-# UUID must be a valid VLESS UUID, for example generated with: uuidgen
 
 [observability]
 enabled = true
 
 [vars]
-# Optional comma-separated proxy fallbacks. Examples:
-# PROXY_HOSTS = "proxy.example.com:443,proxy2.example.com:8443"
 PROXY_POLICY = "direct-first"
 DOH_STRATEGY = "race"
 DNS_CACHE_TTL_SECONDS = "60"
