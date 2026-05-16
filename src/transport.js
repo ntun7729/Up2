@@ -2,9 +2,10 @@ import { connect } from "cloudflare:sockets";
 import { WS_OPEN } from "./constants.js";
 import { dnsUdpWriter } from "./dns.js";
 import { parseVless } from "./vless.js";
-import { closeWs, hostPort, log, message, timeout } from "./utils.js";
+import { closeWs, concat, hostPort, log, message, timeout } from "./utils.js";
 
 const unavailableUntil = new Map();
+const MIN_VLESS_HEADER = 24;
 
 export async function handleWebSocket(request, cfg) {
   const pair = new WebSocketPair();
@@ -14,6 +15,7 @@ export async function handleWebSocket(request, cfg) {
   const input = webSocketReadable(server, request.headers.get("sec-websocket-protocol") || "", cfg);
   const remote = { socket: null };
   let writeUdp = null;
+  let pendingHeader = null;
   let label = "";
 
   input.pipeTo(new WritableStream({
@@ -27,12 +29,24 @@ export async function handleWebSocket(request, cfg) {
         return;
       }
 
-      const parsed = parseVless(chunk, cfg.uuid);
+      let data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+      if (pendingHeader) {
+        data = concat([pendingHeader, data], pendingHeader.byteLength + data.byteLength);
+        pendingHeader = null;
+      }
+
+      if (data.byteLength < MIN_VLESS_HEADER) {
+        pendingHeader = data;
+        log(cfg, "vless_wait_header", { bytes: data.byteLength });
+        return;
+      }
+
+      const parsed = parseVless(data, cfg.uuid);
       if (parsed.error) throw new Error(parsed.message);
       label = `${parsed.host}:${parsed.port}/${parsed.udp ? "udp" : "tcp"}`;
 
       const replyHeader = new Uint8Array([parsed.version[0], 0]);
-      const firstPayload = chunk.slice(parsed.offset);
+      const firstPayload = data.slice(parsed.offset);
 
       if (parsed.udp) {
         if (parsed.port !== 53) throw new Error("UDP is only supported for DNS on port 53");
@@ -143,7 +157,7 @@ function webSocketReadable(webSocket, earlyHeader, cfg) {
       });
       webSocket.addEventListener("error", (event) => controller.error(event));
 
-      const early = decodeEarlyData(earlyHeader);
+      const early = decodeEarlyData(earlyHeader, cfg);
       if (early) controller.enqueue(early);
     },
     cancel(reason) {
@@ -154,13 +168,18 @@ function webSocketReadable(webSocket, earlyHeader, cfg) {
   });
 }
 
-function decodeEarlyData(value) {
+function decodeEarlyData(value, cfg) {
   if (!value) return null;
   try {
     const normalized = String(value).replaceAll("-", "+").replaceAll("_", "/");
     const padded = normalized + "===".slice((normalized.length + 3) % 4);
     const binary = atob(padded);
-    return Uint8Array.from(binary, (ch) => ch.charCodeAt(0)).buffer;
+    const data = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    if (data.byteLength < MIN_VLESS_HEADER) {
+      log(cfg, "early_data_ignored", { bytes: data.byteLength });
+      return null;
+    }
+    return data.buffer;
   } catch {
     return null;
   }
