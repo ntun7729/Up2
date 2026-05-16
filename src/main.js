@@ -1,5 +1,6 @@
 import { VERSION } from "./constants.js";
 import { loadConfig } from "./config.js";
+import { checkTcpTarget } from "./diag.js";
 import { dnsStatus } from "./dns.js";
 import { buildSubscription } from "./subscription.js";
 import { handleWebSocket } from "./transport.js";
@@ -29,7 +30,7 @@ export default {
   },
 };
 
-function handleHttp(request, url, cfg) {
+async function handleHttp(request, url, cfg) {
   const path = normPath(url.pathname);
   const head = request.method === "HEAD";
   const uuidBase = cfg.uuid ? `/${cfg.uuid}` : "";
@@ -60,9 +61,13 @@ function handleHttp(request, url, cfg) {
     }, 200, head);
   }
 
+  if (path === "/diag/tcp") {
+    return json(await checkTcpTarget(url.searchParams.get("target") || "cloudflare.com:443", cfg.connectTimeout), 200, head);
+  }
+
   if (path === "/" || (uuidBase && path === uuidBase)) {
     const body = cfg.uuid
-      ? `Up2 OK\nSubscription: ${url.origin}/${cfg.uuid}/sub\n`
+      ? `Up2 OK\nSubscription: ${url.origin}/${cfg.uuid}/sub\nDiagnostic: ${url.origin}/diag/tcp?target=cloudflare.com:443\n`
       : "Up2 OK\nSet UUID first\n";
     return txt(body, 200, {}, head);
   }
