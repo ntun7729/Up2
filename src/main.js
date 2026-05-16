@@ -47,6 +47,8 @@ async function handleHttp(request, url, cfg) {
       uuidConfigured: Boolean(cfg.uuid),
       proxyPolicy: cfg.policy,
       proxyCount: cfg.proxies.length,
+      socks5Configured: Boolean(cfg.socks5),
+      socks5Host: cfg.socks5 ? `${cfg.socks5.host}:${cfg.socks5.port}` : null,
       proxyFailCooldownMs: cfg.proxyCooldown,
       doh: cfg.doh,
       dohStrategy: cfg.dohStrategy,
