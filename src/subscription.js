@@ -1,13 +1,15 @@
 import { CF_IPS } from "./constants.js";
 import { clamp, csv, int, portNum, val } from "./utils.js";
 
+const DEFAULT_ALPN = "http/1.1";
+
 export function buildSubscription(url, cfg) {
   if (!cfg.uuid) throw new Error("UUID is required");
 
   const host = val(url, "host") || url.hostname;
   const sni = val(url, "sni") || host;
   const fp = normalizeFingerprint(val(url, "fp") || "chrome");
-  const alpn = normalizeAlpn(val(url, "alpn") || "h3,h2,http/1.1");
+  const alpn = normalizeAlpn(val(url, "alpn") || DEFAULT_ALPN);
   const ed = String(int(val(url, "ed"), 2048));
   const name = val(url, "name") || "Up2-VLESS";
   const count = clamp(int(val(url, "count"), 10), 1, 30);
@@ -71,5 +73,5 @@ function normalizeFingerprint(value) {
 function normalizeAlpn(value) {
   const alpn = String(value || "").trim().toLowerCase();
   if (!alpn || ["0", "false", "off", "none", "disable", "disabled"].includes(alpn)) return "";
-  return /^[a-z0-9.,/_-]{1,64}$/.test(alpn) ? alpn : "h3,h2,http/1.1";
+  return /^[a-z0-9.,/_-]{1,64}$/.test(alpn) ? alpn : DEFAULT_ALPN;
 }
