@@ -60,10 +60,13 @@ export async function handleWebSocket(request, cfg) {
 async function openRemote(remote, host, port, firstPayload, webSocket, replyHeader, cfg) {
   let lastError;
   for (const target of routeCandidates(host, port, cfg)) {
+    const started = Date.now();
     try {
+      log(cfg, "tcp_try", target);
       const socket = connect({ hostname: target.host, port: target.port });
       if (socket.opened) await timeout(socket.opened, cfg.connectTimeout, "TCP connect timeout");
       remote.socket = socket;
+      log(cfg, "tcp_connected", { ...target, latencyMs: Date.now() - started });
 
       const writer = socket.writable.getWriter();
       if (firstPayload?.byteLength) await writer.write(firstPayload);
@@ -75,7 +78,7 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
     } catch (err) {
       lastError = err;
       if (target.kind === "relay" && cfg.proxyCooldown > 0) unavailableUntil.set(target.id, Date.now() + cfg.proxyCooldown);
-      log(cfg, "tcp_fail", { ...target, message: message(err) });
+      log(cfg, "tcp_fail", { ...target, latencyMs: Date.now() - started, message: message(err) });
       try { remote.socket?.close(); } catch {}
       remote.socket = null;
     }
