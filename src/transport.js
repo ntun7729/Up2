@@ -15,7 +15,7 @@ export async function handleWebSocket(request, cfg) {
   server.accept();
 
   const input = webSocketReadable(server, request.headers.get("sec-websocket-protocol") || "", cfg);
-  const remote = { socket: null };
+  const remote = { socket: null, target: null };
   let writeUdp = null;
   let pendingHeader = null;
   let label = "";
@@ -27,9 +27,14 @@ export async function handleWebSocket(request, cfg) {
       if (remote.socket) {
         const data = toBytes(chunk);
         if (!data.byteLength) return;
-        const writer = remote.socket.writable.getWriter();
-        await writer.write(data);
-        writer.releaseLock();
+        try {
+          const writer = remote.socket.writable.getWriter();
+          await writer.write(data);
+          writer.releaseLock();
+        } catch (err) {
+          log(cfg, "remote_write_error", { ...(remote.target || {}), bytes: data.byteLength, message: message(err) });
+          throw err;
+        }
         return;
       }
 
@@ -85,7 +90,8 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
   for (const target of await routeCandidates(host, port, cfg)) {
     const started = Date.now();
     try {
-      log(cfg, "tcp_try", publicTarget(target));
+      const safeTarget = publicTarget(target);
+      log(cfg, "tcp_try", safeTarget);
       let socket;
       if (target.kind === "socks5") {
         socket = await connectViaSocks5(cfg.socks5, host, port, firstPayload, cfg);
@@ -98,10 +104,14 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
       }
 
       remote.socket = socket;
-      log(cfg, "tcp_connected", { ...publicTarget(target), latencyMs: Date.now() - started });
+      remote.target = safeTarget;
+      log(cfg, "tcp_connected", { ...safeTarget, latencyMs: Date.now() - started });
 
-      socket.closed.catch(() => {}).finally(() => closeWs(webSocket));
-      pipeBack(socket, webSocket, replyHeader, cfg);
+      socket.closed
+        .then(() => log(cfg, "remote_socket_closed", safeTarget))
+        .catch((err) => log(cfg, "remote_socket_closed", { ...safeTarget, message: message(err) }))
+        .finally(() => closeWs(webSocket));
+      pipeBack(socket, webSocket, replyHeader, cfg, safeTarget);
       return;
     } catch (err) {
       lastError = err;
@@ -113,6 +123,7 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
       log(cfg, "tcp_fail", { ...publicTarget(target), latencyMs: Date.now() - started, message: msg });
       try { remote.socket?.close(); } catch {}
       remote.socket = null;
+      remote.target = null;
     }
   }
   throw lastError || new Error("All connection attempts failed");
@@ -178,22 +189,28 @@ function isUnavailable(id) {
   return true;
 }
 
-function pipeBack(socket, webSocket, replyHeader, cfg) {
+function pipeBack(socket, webSocket, replyHeader, cfg, target = {}) {
   let header = replyHeader;
+  let downstreamBytes = 0;
   socket.readable.pipeTo(new WritableStream({
     async write(chunk) {
+      const data = toBytes(chunk);
+      downstreamBytes += data.byteLength;
       if (webSocket.readyState !== WS_OPEN) throw new Error("WebSocket is not open");
       if (header) {
-        webSocket.send(await new Blob([header, chunk]).arrayBuffer());
+        webSocket.send(await new Blob([header, data]).arrayBuffer());
         header = null;
       } else {
-        webSocket.send(chunk);
+        webSocket.send(data);
       }
     },
   })).catch((err) => {
-    log(cfg, "pipe_error", { message: message(err) });
+    log(cfg, "pipe_error", { ...target, downstreamBytes, message: message(err) });
     closeWs(webSocket);
-  }).finally(() => closeWs(webSocket));
+  }).finally(() => {
+    log(cfg, "pipe_done", { ...target, downstreamBytes });
+    closeWs(webSocket);
+  });
 }
 
 function webSocketReadable(webSocket, earlyHeader, cfg) {
