@@ -23,13 +23,20 @@ export async function handleWebSocket(request, cfg) {
       if (writeUdp) return writeUdp(chunk);
 
       if (remote.socket) {
+        const data = toBytes(chunk);
+        if (!data.byteLength) return;
         const writer = remote.socket.writable.getWriter();
-        await writer.write(chunk);
+        await writer.write(data);
         writer.releaseLock();
         return;
       }
 
-      let data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+      let data = toBytes(chunk);
+      if (!data.byteLength) {
+        log(cfg, "empty_ws_frame_ignored");
+        return;
+      }
+
       if (pendingHeader) {
         data = concat([pendingHeader, data], pendingHeader.byteLength + data.byteLength);
         pendingHeader = null;
@@ -147,9 +154,13 @@ function webSocketReadable(webSocket, earlyHeader, cfg) {
   let cancelled = false;
   return new ReadableStream({
     start(controller) {
-      webSocket.addEventListener("message", (event) => {
+      webSocket.addEventListener("message", async (event) => {
         if (cancelled) return;
-        controller.enqueue(typeof event.data === "string" ? new TextEncoder().encode(event.data) : event.data);
+        try {
+          controller.enqueue(await eventDataToBytes(event.data));
+        } catch (err) {
+          controller.error(err);
+        }
       });
       webSocket.addEventListener("close", () => {
         closeWs(webSocket);
@@ -168,6 +179,21 @@ function webSocketReadable(webSocket, earlyHeader, cfg) {
   });
 }
 
+async function eventDataToBytes(value) {
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value && typeof value.arrayBuffer === "function") return new Uint8Array(await value.arrayBuffer());
+  return new Uint8Array(0);
+}
+
+function toBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array(0);
+}
+
 function decodeEarlyData(value, cfg) {
   if (!value) return null;
   try {
@@ -179,7 +205,7 @@ function decodeEarlyData(value, cfg) {
       log(cfg, "early_data_ignored", { bytes: data.byteLength });
       return null;
     }
-    return data.buffer;
+    return data;
   } catch {
     return null;
   }
