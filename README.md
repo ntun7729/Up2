@@ -1,6 +1,6 @@
 # Up2 VLESS Worker
 
-A clean Cloudflare Worker implementation for VLESS over WebSocket with TLS termination at Cloudflare. This repo replaces the old two-file obfuscated layout with one readable Worker entrypoint and a small helper module.
+A clean Cloudflare Worker implementation for VLESS over WebSocket with TLS termination at Cloudflare. This repo replaces the old two-file obfuscated layout with one readable Worker entrypoint.
 
 ## What is included
 
@@ -11,7 +11,6 @@ A clean Cloudflare Worker implementation for VLESS over WebSocket with TLS termi
 - Proxy cooldown after failed connection attempts
 - `/health`, `/status`, and subscription routes
 - Query-customizable subscription generation
-- Node unit tests for the parser and subscription helpers
 
 ## Required setup
 
@@ -21,10 +20,16 @@ Install dependencies:
 npm install
 ```
 
+Check that the local Wrangler binary works:
+
+```bash
+npx wrangler --version
+```
+
 Set your UUID as a Cloudflare secret. Do not commit your UUID into the repository.
 
 ```bash
-wrangler secret put UUID
+npx wrangler secret put UUID
 ```
 
 Deploy:
@@ -39,11 +44,19 @@ Run locally:
 npm run dev
 ```
 
-Run tests:
+Run the syntax check:
 
 ```bash
 npm test
 ```
+
+If you want the plain `wrangler` command to work everywhere, install it globally instead:
+
+```bash
+npm install -g wrangler@latest
+```
+
+That is optional. The project works with local Wrangler through `npx wrangler`, `npm run dev`, and `npm run deploy`.
 
 ## Routes
 
@@ -80,7 +93,7 @@ https://your-worker.example.workers.dev/<UUID>/sub?host=your-worker.example.work
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `UUID` | required | VLESS UUID. Use `wrangler secret put UUID`. |
+| `UUID` | required | VLESS UUID. Use `npx wrangler secret put UUID`. |
 | `PROXY_HOSTS` | empty | Comma-separated proxy fallback hosts, optionally with ports. |
 | `PROXY_POLICY` | `direct-first` | `direct-first`, `proxy-first`, or `proxy-only`. |
 | `PROXY_FAIL_COOLDOWN_MS` | `120000` | How long to skip a failed proxy candidate. |
