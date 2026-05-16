@@ -1,6 +1,7 @@
 import { connect } from "cloudflare:sockets";
 import { WS_OPEN } from "./constants.js";
 import { dnsUdpWriter } from "./dns.js";
+import { resolveHostIps } from "./resolve.js";
 import { parseVless } from "./vless.js";
 import { closeWs, concat, hostPort, log, message, timeout } from "./utils.js";
 
@@ -80,7 +81,7 @@ export async function handleWebSocket(request, cfg) {
 
 async function openRemote(remote, host, port, firstPayload, webSocket, replyHeader, cfg) {
   let lastError;
-  for (const target of routeCandidates(host, port, cfg)) {
+  for (const target of await routeCandidates(host, port, cfg)) {
     const started = Date.now();
     try {
       log(cfg, "tcp_try", target);
@@ -111,7 +112,7 @@ async function openRemote(remote, host, port, firstPayload, webSocket, replyHead
   throw lastError || new Error("All connection attempts failed");
 }
 
-function routeCandidates(host, port, cfg) {
+async function routeCandidates(host, port, cfg) {
   const direct = { kind: "direct", host, port, id: `d:${host}:${port}` };
   const relays = cfg.proxies.map((value) => {
     const target = hostPort(value, port);
@@ -121,10 +122,24 @@ function routeCandidates(host, port, cfg) {
   const usableRelays = relays.filter((target) => !isUnavailable(target.id));
   const availableRelays = usableRelays.length ? usableRelays : relays;
   const directList = isUnavailable(direct.id) && availableRelays.length ? [] : [direct];
+  const ipDirectList = await ipCandidates(host, port, cfg, availableRelays.length > 0);
 
   if (cfg.policy === "proxy-only") return availableRelays;
-  if (cfg.policy === "proxy-first") return [...availableRelays, ...directList];
-  return [...directList, ...availableRelays];
+  if (cfg.policy === "proxy-first") return [...availableRelays, ...directList, ...ipDirectList];
+  return [...directList, ...ipDirectList, ...availableRelays];
+}
+
+async function ipCandidates(host, port, cfg, hasRelay) {
+  if (!hasRelay) return [];
+  if (!isUnavailable(`d:${host}:${port}`)) return [];
+  const ips = await resolveHostIps(host, cfg);
+  const out = [];
+  for (const ip of ips.slice(0, 4)) {
+    const id = `ip:${ip}:${port}`;
+    if (!isUnavailable(id)) out.push({ kind: "direct-ip", host: ip, port, id, originalHost: host });
+  }
+  if (out.length) log(cfg, "tcp_ip_candidates", { host, port, count: out.length });
+  return out;
 }
 
 function shouldCooldown(target, msg) {
